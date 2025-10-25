@@ -6,6 +6,7 @@ import pybamm
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import numpy as np
+import math
 from tqdm import tqdm
 
 import tkinter as tk
@@ -146,7 +147,7 @@ def analyze_and_visualize(df):
     ).head(5)
     
     # combined best
-    best_combined = pd.concat([best_nmc, best_lfp])
+    best_combined = pd.concat([best_nmc, best_lfp, best_moli])
     best_combined.to_csv("topology_analysis/best_topologies.csv", index=False)
     print("Saved best_topologies.csv")
     
@@ -278,7 +279,7 @@ def simulate_topology(chemistry, topology, cooling_rate, discharge_current):
             param = pybamm.ParameterValues(chemistry=pybamm.parameter_sets.Marquis2019)
         elif chemistry == "MOLI":
             # we'll start with a bundled parameter set and modify it later
-            param = pybamm.ParameterValues(Chemistry=pybamm.parameter_sets.Chen2020)
+            param = pybamm.ParameterValues(chemistry=pybamm.parameter_sets.Chen2020)
         else:
             param = pybamm.ParameterValues(chemistry=pybamm.parameter_sets.Chen2020)
     except:
@@ -286,7 +287,6 @@ def simulate_topology(chemistry, topology, cooling_rate, discharge_current):
         param = pybamm.ParameterValues("Chen2020")
     
     # set cell-level parameters for possible cells
-    # 
     param.update({
         "Total heat transfer coefficient [W.m-2.K-1]": cooling_rate,
         "Cell cooling surface area [m2]": 0.035,   # typical 18650 cell
@@ -319,10 +319,17 @@ def simulate_topology(chemistry, topology, cooling_rate, discharge_current):
     # extract results
     time = solution["Time [s]"].entries
     current_draw = np.full_like(time, discharge_current)  # Constant 60 A pack current
+    mod_current_draw(current_draw)
     pack_voltage = solution["Terminal voltage [V]"].entries * topology[0]
     temperature = solution["Volume-averaged cell temperature [K]"].entries - 273.15
     
     return time, current_draw, pack_voltage, temperature
+
+def mod_current_draw(current):
+    for i, c in enumerate(current):
+        current[i] = math.sin((i/10) * 2 * math.pi)*30 + 60
+
+    print(current)
 
 def save_individual_plot(output_dir, config_label, time, current, voltage, temp):
     """save individual plot for this configuration"""
@@ -361,7 +368,6 @@ def save_individual_plot(output_dir, config_label, time, current, voltage, temp)
 def compare_topologies(output_dir):
     """compare different battery configurations"""
     # test configurations
-    # I hard coded these after looking at the previous results
     configurations = [
         {"chemistry": "NMC", "topology": (140, 4), "cooling": "natural", "discharge": 60},
         {"chemistry": "NMC", "topology": (140, 4), "cooling": "forced_air", "discharge": 60},
@@ -369,13 +375,18 @@ def compare_topologies(output_dir):
         {"chemistry": "LFP", "topology": (160, 6), "cooling": "natural", "discharge": 60},
         {"chemistry": "LFP", "topology": (160, 6), "cooling": "forced_air", "discharge": 60},
         {"chemistry": "LFP", "topology": (160, 6), "cooling": "liquid", "discharge": 60},
-        {"chemistry": "NMC", "topology": (120, 8), "cooling": "liquid", "discharge": 60},
+        {"chemistry": "MOLI", "topology": (120, 8), "cooling": "natural1", "discharge": 60},
+        {"chemistry": "MOLI", "topology": (120, 8), "cooling": "natural2", "discharge": 60},
+        {"chemistry": "MOLI", "topology": (120, 8), "cooling": "natural3", "discharge": 60},
     ]
 
     # cooling rates [W/m^2 * K]
-    # these are estimates but can be more accurately calculated when I get the up to date CAD
+    # these are estimates but can be more accurately adjusted to measured values when the accumulator is built
     cooling_rates = {
         "natural": 5,       # passive cooling
+        "natural1": 5,      # different labels so figures don't overwrite themselves
+        "natural2": 5,
+        "natural3": 5,
         "forced_air": 50,   # active air cooling
         "liquid": 1000,     # liquid cooling
     }
@@ -383,11 +394,12 @@ def compare_topologies(output_dir):
     # combined comparison figure
     fig, axs = plt.subplots(3, 1, figsize=(12, 14))
     results = []
-    colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k']
-    linestyles = ['-', '--', '-.', ':', '-', '--', '-.']
+    colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k', 'b', 'b', 'b', 'b']
+    linestyles = ['-', '--', '-.', ':', '-', '--', '-.', '-.', '-.', '-.', '-.']
     plot_data = []
 
     for i, config in enumerate(tqdm(configurations, desc="Simulating")):
+
         cooling_rate = cooling_rates[config["cooling"]]
         config_label = (f"{config['chemistry']} {config['topology'][0]}s{config['topology'][1]}p "
                         f"{config['cooling']} cooling")
@@ -469,96 +481,12 @@ def compare_topologies(output_dir):
 
     return results, plot_data
 
-class BatteryUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Battery Cell Topology Viewer")
-        self.geometry("1200x600")
-
-        # Grid layout
-        self.columnconfigure(0, weight=0)  # Side panel
-        self.columnconfigure(1, weight=1)  # Topology
-        self.columnconfigure(2, weight=1)  # Plot
-
-        # Side Panel
-        self.side_panel = ttk.LabelFrame(self, text="Controls")
-        self.side_panel.grid(row=0, column=0, sticky="ns", padx=10, pady=10)
-
-        self.add_controls()
-
-        # Topology Frame
-        self.topology_frame = ttk.LabelFrame(self, text="3D Cell Topology")
-        self.topology_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-
-        # Plot Frame
-        self.plot_frame = ttk.LabelFrame(self, text="Simulation Plot")
-        self.plot_frame.grid(row=0, column=2, sticky="nsew", padx=10, pady=10)
-
-        self.draw_topology()
-        self.draw_plot()
-
-    def add_controls(self):
-        ttk.Button(self.side_panel, text="Start", command=self.start_simulation).pack(pady=5, fill='x')
-        ttk.Button(self.side_panel, text="Pause", command=self.pause_simulation).pack(pady=5, fill='x')
-        ttk.Button(self.side_panel, text="Reset", command=self.reset_simulation).pack(pady=5, fill='x')
-        ttk.Button(self.side_panel, text="Run Params", command=self.run_params_script).pack(pady=20, fill='x')
-
-    def start_simulation(self):
-        print("Simulation started")
-
-    def pause_simulation(self):
-        print("Simulation paused")
-
-    def reset_simulation(self):
-        print("Simulation reset")
-
-    def run_params_script(self):
-        pass
-
-    def draw_topology(self):
-        fig = Figure(figsize=(5, 4), dpi=100)
-        ax = fig.add_subplot(111, projection='3d')
-
-        for i in range(3):  # Series
-            for j in range(4):  # Parallel
-                x, y, z = i * 2, j * 1.5, 0
-                ax.bar3d(x, y, z, 1, 1, 1, shade=True)
-
-        ax.set_title("Series-Parallel Cell Layout")
-        ax.set_xlabel("Series")
-        ax.set_ylabel("Parallel")
-        ax.set_zlabel("Height")
-
-        canvas = FigureCanvasTkAgg(fig, master=self.topology_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-    def draw_plot(self):
-        fig = Figure(figsize=(5, 4), dpi=100)
-        ax = fig.add_subplot(111)
-
-        time = np.linspace(0, 3600, 100)
-        voltage = 3.7 - 0.5 * np.exp(time / 1000)
-        ax.plot(time, voltage)
-        ax.set_title("Voltage vs Time")
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("Voltage (V)")
-
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-
 if __name__ == "__main__":
     pybamm.set_logging_level("ERROR")
     
     # use environment variable for output if running in container
     output_base = os.getenv("OUTPUT_DIR", "battery_simulation_results")
     output_dirs = setup_output_dirs(output_base)
-
-    # start tk
-    #app = BatteryUI()
-    #app.mainloop()
 
     # debug, run simulation:
     results, plot_data = compare_topologies(output_dirs)
